@@ -1,0 +1,2 @@
+-- Initial schema migration.
+-- Run `npx prisma migrate dev --name init` to generate a provider-specific migration from schema.prisma.

@@ -1,0 +1,243 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum LeagueStatus {
+  OPEN
+  FULL
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum GameweekStatus {
+  UPCOMING
+  OPEN
+  LIVE
+  COMPLETED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  ENTRY_FEE
+  REFUND
+  PAYOUT
+}
+
+enum TransactionStatus {
+  PENDING
+  HELD
+  COMPLETED
+  REFUNDED
+  FAILED
+  REVERSED
+}
+
+model User {
+  id              String             @id @default(cuid())
+  name            String
+  phone           String             @unique
+  email           String?            @unique
+  passwordHash    String
+  role            UserRole           @default(USER)
+  walletBalance   Int                @default(0)
+  reservedBalance Int                @default(0)
+  phoneVerifiedAt DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  transactions    Transaction[]
+  memberships     LeagueMembership[]
+  squads          Squad[]
+  scores          GameweekScore[]
+  auditLogs       AuditLog[]         @relation("ActorAuditLogs")
+}
+
+model Gameweek {
+  id            String          @id @default(cuid())
+  fplGameweekId Int             @unique
+  name          String
+  status        GameweekStatus  @default(UPCOMING)
+  deadline      DateTime?
+  startedAt     DateTime?
+  endedAt       DateTime?
+  leagues       League[]
+  scores        GameweekScore[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model LeagueTemplate {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  memberCount      Int
+  entryFee         Int
+  winnerPercentage Int      @default(90)
+  platformPercentage Int    @default(10)
+  tiebreakerOrder  Json
+  active            Boolean @default(true)
+  leagues           League[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model League {
+  id              String           @id @default(cuid())
+  templateId      String
+  gameweekId      String
+  status          LeagueStatus     @default(OPEN)
+  memberCount     Int
+  entryFee        Int
+  prizePool       Int              @default(0)
+  joinDeadline    DateTime?
+  previousLeagueId String?
+  template        LeagueTemplate   @relation(fields: [templateId], references: [id])
+  gameweek        Gameweek         @relation(fields: [gameweekId], references: [id])
+  previousLeague  League?          @relation("LeagueChain", fields: [previousLeagueId], references: [id])
+  nextLeagues     League[]         @relation("LeagueChain")
+  memberships     LeagueMembership[]
+  transactions    Transaction[]
+  squads          Squad[]
+  scores          GameweekScore[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([gameweekId, status])
+  @@index([templateId, gameweekId])
+}
+
+model LeagueMembership {
+  id           String    @id @default(cuid())
+  userId       String
+  leagueId     String
+  joinedAt     DateTime  @default(now())
+  finalRank    Int?
+  finalPoints  Int?
+  payoutAmount Int?
+  user         User      @relation(fields: [userId], references: [id])
+  league       League    @relation(fields: [leagueId], references: [id])
+
+  @@unique([userId, leagueId])
+  @@index([leagueId, finalRank])
+}
+
+model Squad {
+  id              String        @id @default(cuid())
+  userId          String
+  leagueId        String?
+  formation       String
+  captainId       Int
+  viceCaptainId   Int
+  budgetRemaining Int
+  lockedAt        DateTime?
+  user            User          @relation(fields: [userId], references: [id])
+  league          League?       @relation(fields: [leagueId], references: [id])
+  players         SquadPlayer[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId, leagueId])
+}
+
+model SquadPlayer {
+  id        String  @id @default(cuid())
+  squadId   String
+  playerId  Int
+  position  String
+  isBench   Boolean @default(false)
+  squad     Squad   @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  player    Player  @relation(fields: [playerId], references: [id])
+
+  @@unique([squadId, playerId])
+}
+
+model Player {
+  id           Int           @id
+  name         String
+  club         String
+  position     String
+  price        Int
+  externalFplId Int          @unique
+  squadPlayers SquadPlayer[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model GameweekScore {
+  id            String   @id @default(cuid())
+  userId        String
+  leagueId      String
+  gameweekId    String
+  gameweek      Int
+  points        Int
+  captainPoints Int      @default(0)
+  transfers     Int      @default(0)
+  squadValue    Int      @default(0)
+  breakdown     Json
+  calculatedAt  DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id])
+  league        League  @relation(fields: [leagueId], references: [id])
+  gameweekRef   Gameweek @relation(fields: [gameweekId], references: [id])
+
+  @@unique([userId, leagueId, gameweekId])
+  @@index([leagueId, points])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  userId          String
+  type            TransactionType
+  amount          Int
+  status          TransactionStatus
+  balanceBefore   Int
+  balanceAfter    Int
+  reservedBefore  Int             @default(0)
+  reservedAfter   Int             @default(0)
+  relatedLeagueId String?
+  mpesaRef        String?
+  idempotencyKey  String?          @unique
+  description     String
+  metadata        Json?
+  createdAt       DateTime         @default(now())
+  user            User              @relation(fields: [userId], references: [id])
+  relatedLeague   League?           @relation(fields: [relatedLeagueId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([relatedLeagueId, status])
+  @@index([mpesaRef])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation("ActorAuditLogs", fields: [actorId], references: [id])
+
+  @@index([createdAt])
+}
+
+model MpesaCallback {
+  id             String   @id @default(cuid())
+  checkoutId     String?  @unique
+  merchantRef    String?
+  mpesaReceipt   String?
+  resultCode     Int?
+  rawPayload     Json
+  processed      Boolean @default(false)
+  createdAt      DateTime @default(now())
+}
